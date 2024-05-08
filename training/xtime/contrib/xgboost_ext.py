@@ -15,15 +15,13 @@
 ###
 import json
 import typing as t
-from pathlib import Path
 
 import pandas as pd
-from xgboost import XGBModel
+from xgboost import XGBClassifier, XGBModel
 
-from xtime.estimators.estimator import Model
-from xtime.ml import TaskType
+from xtime.estimators.estimator import Estimator
 
-__all__ = ["TreeTraversal", "get_model_stats"]
+__all__ = ["TreeTraversal", "TreeModel"]
 
 
 class TreeTraversal:
@@ -70,48 +68,70 @@ class TreeTraversal:
                 self._traverse(child)
 
 
-def get_model_stats(
-    model_dir: Path, task_type: TaskType, num_trees: int = 0, cache: t.Optional[t.Dict] = None
-) -> t.Dict:
-    """Compute some basic statistics of an XGBoost model.
+class TreeModel:
+    def __init__(self, model: XGBModel) -> None:
+        assert isinstance(model, XGBModel), f"Unexpected model type ({type(model)})."
+        self._estimator = Estimator()
+        self._estimator.model = model
+        self._trees = pd.DataFrame(
+            [
+                TreeTraversal().traverse(json.loads(n)).as_dict()
+                for n in model.get_booster().get_dump(dump_format="json")
+            ]
+        )
+        self._num_rounds = self._trees.shape[0]
+        self._num_trees_per_round = 1
 
-    Args:
-        model_dir: Directory that contains an XGBoost model.
-        task_type: Task type this model was trained for (need to be able to load the right model).
-        num_trees: Number of trees to use to compute statistics. For multi-class classification problems (num classes
-            > 2), this must be `num_rounds * num_classes`. The value of `0` means use all trees.
-        cache: If this function needs to be called multiple times, if the cache is not None, the function will cache
-            the trees data frame in this cache under the "trees" key.
-    Returns:
-        Dictionary with some descriptive statistics of this model that include the following: maximal tree depth,
-        maximal number of leaves, total number of trees. If `num_trees` is specified, and it is smaller or equal
-        to actual number of trees, then number of trees will equal to this number.
-    """
+        if isinstance(model, XGBClassifier):
+            num_classes: int = getattr(model, "n_classes_", None)
+            if num_classes is None:
+                raise ValueError("Number of classes is None for XGBClassifier (unfitted model?).")
+            if num_classes > 2:
+                self._num_trees_per_round = num_classes
+                self._num_rounds = self._num_rounds // self._num_trees_per_round
 
-    def _get_stats(_trees: pd.DataFrame) -> t.Dict:
-        _num_trees = _trees.shape[0] if num_trees <= 0 else min(num_trees, _trees.shape[0])
+    @property
+    def ensemble(self) -> t.Optional[str]:
+        return "boosting"
+
+    @property
+    def ensemble_size(self) -> int:
+        return self._num_rounds
+
+    @property
+    def model_size(self) -> int:
+        return self._num_trees_per_round
+
+    @property
+    def num_trees(self) -> int:
+        return self.ensemble_size * self.model_size
+
+    @property
+    def estimator(self) -> Estimator:
+        return self._estimator
+
+    def describe(self, num_models: int = 0) -> t.Dict:
+        """Compute some basic statistics of an XGBoost model.
+
+        Args:
+            model_dir: Directory that contains an XGBoost model.
+            task_type: Task type this model was trained for (need to be able to load the right model).
+            num_trees: Number of trees to use to compute statistics. For multi-class classification problems (num classes
+                > 2), this must be `num_rounds * num_classes`. The value of `0` means use all trees.
+            cache: If this function needs to be called multiple times, if the cache is not None, the function will cache
+                the trees data frame in this cache under the "trees" key.
+        Returns:
+            Dictionary with some descriptive statistics of this model that include the following:
+                - `max_depth`: maximal tree depth
+                - `max_leaves`: maximal number of leaves
+                - `num_trees`: total number of trees. If `num_trees` is specified, and it is smaller or equal
+                  to actual number of trees, then number of trees will equal to this number.
+        """
+        if num_models <= 0:
+            num_models = self.ensemble_size
+        num_trees = min(num_models, self.ensemble_size) * self.model_size
         return {
-            "max_depth": _trees["depth"][0:_num_trees].max(),
-            "max_leaves": _trees["num_leaves"][0:_num_trees].max(),
-            "num_trees": _num_trees,
+            "max_depth": self._trees["depth"][0:num_trees].max(),
+            "max_leaves": self._trees["num_leaves"][0:num_trees].max(),
+            "num_trees": num_trees,
         }
-
-    if cache is not None and "trees" in cache:
-        return _get_stats(cache["trees"])
-
-    if cache is not None and "model" in cache:
-        model: XGBModel = cache["model"]
-    else:
-        model = Model.load_model(model_dir, "xgboost", task_type)
-    if not isinstance(model, XGBModel):
-        raise ValueError(f"Unexpected XGBoost model loaded from '{model_dir}' (type = {type(model)}).")
-    if cache is not None and "model" not in cache:
-        cache["model"] = model
-
-    # For multi-class classification problems, number of `trees = num_classes x num_trees_per_class`
-    trees: pd.DataFrame = pd.DataFrame(
-        [TreeTraversal().traverse(json.loads(n)).as_dict() for n in model.get_booster().get_dump(dump_format="json")]
-    )
-    if cache is not None:
-        cache["trees"] = trees
-    return _get_stats(trees)

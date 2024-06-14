@@ -52,7 +52,8 @@ detailed and, possibly, more accurate information):
 - `openml` Library required by several datasets hosted on OpenML site.
 - `datasets`: Install packages to ensure all datasets can be loaded (includes [`openml`, `timeseries`]).
 - `models`: Install packages to ensure all models can be loaded (includes [`catboost`, `xgboost`, `lightgbm`]).
-- `all`: Install all extra packages.
+- `rapids-12`: Support for GPU-accelerated ML algorithms (random forest). This is for CUDA 12.x.x and python 3.9 only.
+- `all`: Install all extra packages (except `rapids-12`).
 
 > I have the following note in one of my Jupyter notebooks (do not recall the reason for this): 
 > If on Windows OS, run the following cell. The 2nd command can fail - then go to your python directory and run it. 
@@ -270,7 +271,10 @@ Other variables specific to some datasets:
   more details). Usage example: `export XTIME_DISABLE_PATCH_MINIO=1`. When this patching is not disabled, the `xtime`
   looks for proxy server using the following ordered list of environment variables: `https_proxy`, `HTTPS_PROXY`, 
   `http_proxy`, `HTTP_PROXY`. The fist non-empty value will be used.
-
+- `XTIME_SEARCH_HP_PRE_LOAD_DATASET` When running hyperparameter search experiments (`search_hp`), it is possible to 
+  preload the dataset before starting the search. Ray object store is used to distributed the dataset to workers.  
+  Usage example: `export XTIME_SEARCH_HP_PRE_LOAD_DATASET=1`.
+  
 
 # GPU support
 Gradient boosting tree estimators (CatBoost, LightGBM and XGBoost) will use GPUs when `CUDA_VISIBLE_DEVICES` variable 
@@ -312,5 +316,10 @@ use the following development guidelines:
    ruff check --fix .
    pyre --search-path $(python -c 'import site; print(site.getsitepackages()[0])') check
    ```
-6. Run unit tests `pytest`. 
+6. Run unit tests `pytest` (or `python -X utf8 -m pytest` if pytest fails due to encoding issues - still to be resolved ). 
 7. Commit you changes, push to your fork and create a pull request.
+
+
+# Known issues
+- On some systems, the `pytest` fails for some tests (in particular, `test_cli.py -> test_dataset_describe`). There's an
+  open issue to be resolved. Meanwhile, running with `python -X utf8 -m pytest` seems to be resolving it.

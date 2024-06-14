@@ -18,7 +18,7 @@ import logging
 import typing as t
 from pathlib import Path
 
-from xgboost.sklearn import XGBClassifier, XGBModel, XGBRegressor
+from xgboost.sklearn import XGBClassifier, XGBModel, XGBRegressor, XGBRFRegressor, XGBRFClassifier
 
 from xtime.contrib.tune_ext import gpu_available
 from xtime.datasets import Dataset, DatasetMetadata, DatasetSplit
@@ -70,8 +70,13 @@ class XGBoostEstimator(Estimator):
             logger.info("GPU enabled for XGBoost Estimator: device=cuda, tree_method=hist.")
             params.update({"device": "cuda", "tree_method": "hist"})
 
+        self._random_forest = params.pop("random_forest", False)
         self.params = params
-        self.model: XGBModel = self.make_model(dataset_metadata, XGBClassifier, XGBRegressor, params)
+        if self._random_forest:
+            logger.info("xgboost: using bagging (random forest) instead of boosting (gradient boosting).")
+            self.model: XGBModel = self.make_model(dataset_metadata, XGBRFClassifier, XGBRFRegressor, self.params)
+        else:
+            self.model: XGBModel = self.make_model(dataset_metadata, XGBClassifier, XGBRegressor, self.params)
 
     def save_model(self, save_dir: Path) -> None:
         self.model.save_model(save_dir / "model.ubj")
@@ -84,12 +89,13 @@ class XGBoostEstimator(Estimator):
         # clf.best_ntree_limit + early_stopping_rounds (predict will use best_ntree_limit to use the best model).
         # The `clf.best_iteration` will point to the best iteration (clf.best_ntree_limit - 1).
         kwargs = copy.deepcopy(kwargs)
-        if kwargs.get("early_stopping_rounds", None) is None:
-            kwargs["early_stopping_rounds"] = 15
-            if "n_estimators" in self.params:
-                kwargs["early_stopping_rounds"] = max(15, int(0.1 * self.params["n_estimators"]))
-        # This parameter is deprecated in `fit` method, so we set it via `set_params`.
-        self.model.set_params(early_stopping_rounds=kwargs.pop("early_stopping_rounds"))
+        if not self._random_forest:
+            if kwargs.get("early_stopping_rounds", None) is None:
+                kwargs["early_stopping_rounds"] = 15
+                if "n_estimators" in self.params:
+                    kwargs["early_stopping_rounds"] = max(15, int(0.1 * self.params["n_estimators"]))
+            # This parameter is deprecated in `fit` method, so we set it via `set_params`.
+            self.model.set_params(early_stopping_rounds=kwargs.pop("early_stopping_rounds"))
 
         train_split = dataset.split(DatasetSplit.TRAIN)
         if train_split is None:
